@@ -1,0 +1,451 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>語音提詞機</title>
+<style>
+  :root{
+    color-scheme: dark;
+    --ground:#0b0c0e;
+    --panel:#15171b;
+    --line:#2a2d34;
+    --ink:#eeebe3;
+    --ink-soft:#a9a79f;
+    --read:#4b4e56;
+    --cue:#ffc454;
+    --cue-dim:rgba(255,196,84,.08);
+    --ok:#4fd18b;
+    --bad:#ff6b5e;
+    --fs:56px;
+    --measure:1100px;
+    font-family:"Noto Sans TC","PingFang TC","Microsoft JhengHei","Heiti TC",system-ui,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0;background:var(--ground);color:var(--ink)}
+  button,select,input,textarea{font:inherit;color:inherit}
+  button{cursor:pointer}
+  :focus-visible{outline:2px solid var(--cue);outline-offset:2px}
+
+  /* ---------- Setup ---------- */
+  #setup{position:fixed;inset:0;overflow:auto;padding:32px 16px;background:var(--ground);z-index:20}
+  #setup[hidden]{display:none}
+  .setup-wrap{max-width:900px;margin:0 auto;display:grid;gap:18px}
+  .setup-head{display:flex;align-items:baseline;justify-content:space-between;gap:12px;flex-wrap:wrap}
+  .setup-head h1{margin:0;font-size:28px;letter-spacing:.04em}
+  .setup-head h1 span{color:var(--cue)}
+  .hint{color:var(--ink-soft);font-size:14px;line-height:1.6}
+  #script{width:100%;min-height:46vh;resize:vertical;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px 18px;font-size:18px;line-height:1.7}
+  .opts{display:flex;flex-wrap:wrap;gap:12px 22px;align-items:center}
+  .opts label{display:flex;align-items:center;gap:8px;font-size:15px;color:var(--ink-soft)}
+  select,input[type=number]{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:6px 10px}
+  input[type=range]{accent-color:var(--cue)}
+  input[type=checkbox]{accent-color:var(--cue);width:18px;height:18px}
+  .primary{background:var(--cue);color:#1a1405;border:0;border-radius:10px;padding:12px 26px;font-size:18px;font-weight:700;letter-spacing:.05em}
+  .warn{border:1px solid rgba(255,107,94,.4);background:rgba(255,107,94,.08);color:#ffb3aa;border-radius:10px;padding:10px 14px;font-size:14px;line-height:1.6}
+  .keys{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:6px 18px;font-size:13px;color:var(--ink-soft)}
+  kbd{display:inline-block;min-width:22px;text-align:center;padding:1px 6px;border:1px solid var(--line);border-bottom-width:2px;border-radius:5px;background:var(--panel);color:var(--ink);font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;margin-right:6px}
+
+  /* ---------- Prompter ---------- */
+  #stage{position:fixed;inset:0;overflow-y:scroll;scrollbar-width:none}
+  #stage::-webkit-scrollbar{display:none}
+  #stage.mirror #text{transform:scaleX(-1)}
+  #text{max-width:var(--measure);margin:0 auto;padding:50vh 6vw 60vh;font-size:var(--fs);line-height:1.6;font-weight:500;white-space:pre-wrap;word-break:break-word;letter-spacing:.02em}
+  #text .t{cursor:pointer;transition:color .25s}
+  #text .t.r{color:var(--read)}
+  #text .t.c{color:var(--cue)}
+  #text .t.at{box-shadow:inset 0 -.09em 0 var(--cue)}
+  .band{position:fixed;left:0;right:0;top:35%;height:calc(var(--fs)*1.6);transform:translateY(-15%);background:var(--cue-dim);pointer-events:none;z-index:1}
+  .band::before,.band::after{content:"";position:absolute;top:50%;transform:translateY(-50%);border:12px solid transparent}
+  .band::before{left:0;border-left-color:var(--cue)}
+  .band::after{right:0;border-right-color:var(--cue)}
+
+  #bar{position:fixed;top:0;left:0;right:0;z-index:5;display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:10px 16px;padding-top:calc(10px + env(safe-area-inset-top,0px));background:linear-gradient(#0b0c0ef2,#0b0c0e00);transition:opacity .4s}
+  #bar.idle{opacity:0;pointer-events:none}
+  @media (max-width:700px){#bar button{padding:9px 12px;font-size:15px}#bar .sp{display:none}}
+  #bar button{background:#1b1d22;border:1px solid var(--line);border-radius:8px;padding:7px 12px;font-size:14px}
+  #bar button.on{border-color:var(--cue);color:var(--cue)}
+  #bar .sp{flex:1}
+  #micBtn.live{background:rgba(79,209,139,.12);border-color:var(--ok);color:var(--ok)}
+
+  #status{position:fixed;left:0;right:0;bottom:0;z-index:5;display:flex;gap:14px;align-items:center;padding:8px 16px;padding-bottom:calc(8px + env(safe-area-inset-bottom,0px));font-size:14px;color:var(--ink-soft);background:linear-gradient(#0b0c0e00,#0b0c0ef2)}
+  .dot{width:10px;height:10px;border-radius:50%;background:#555;flex:none}
+  .dot.live{background:var(--ok);box-shadow:0 0 0 0 rgba(79,209,139,.6);animation:pulse 1.6s infinite}
+  .dot.err{background:var(--bad)}
+  @keyframes pulse{70%{box-shadow:0 0 0 8px rgba(79,209,139,0)}100%{box-shadow:0 0 0 0 rgba(79,209,139,0)}}
+  #heard{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;direction:rtl;text-align:left}
+  #heard bdi{direction:ltr}
+  #pct{font-variant-numeric:tabular-nums;flex:none}
+  #progress{position:fixed;left:0;bottom:0;height:3px;background:var(--cue);width:0;z-index:6;transition:width .3s}
+  #toast{position:fixed;left:50%;top:70px;transform:translateX(-50%);background:#1b1d22;border:1px solid var(--line);border-radius:10px;padding:10px 16px;font-size:15px;z-index:30;max-width:calc(100% - 32px)}
+  @media (prefers-reduced-motion:reduce){.dot.live{animation:none}#text .t{transition:none}}
+</style>
+</head>
+<body>
+
+<section id="setup">
+  <div class="setup-wrap">
+    <div class="setup-head">
+      <h1>語音<span>提詞機</span></h1>
+      <span class="hint">貼上講稿 → 開始 → 開麥克風，唸到哪就捲到哪</span>
+    </div>
+    <div id="noSR" class="warn" hidden>這個瀏覽器不支援語音辨識。請改用 <b>Chrome</b> 或 <b>Edge</b> 開啟這個檔案。沒有語音時仍可用鍵盤、點字或自動捲動操作。</div>
+    <textarea id="script" spellcheck="false" placeholder="把講稿貼在這裡"></textarea>
+    <div class="opts">
+      <label>辨識語言
+        <select id="lang">
+          <option value="zh-TW">中文（台灣）</option>
+          <option value="cmn-Hans-CN">中文（簡體）</option>
+          <option value="en-US">English (US)</option>
+          <option value="ja-JP">日本語</option>
+        </select>
+      </label>
+      <label>字級 <input id="fs" type="range" min="28" max="120" step="2" value="56"> <span id="fsv">56</span></label>
+      <label><input id="mirror" type="checkbox"> 鏡像（搭配提詞玻璃）</label>
+    </div>
+    <div><button class="primary" id="startBtn">開始提詞</button></div>
+    <div class="keys">
+      <div><kbd>空白</kbd>開／關麥克風</div>
+      <div><kbd>↓</kbd><kbd>↑</kbd>下一句／上一句</div>
+      <div><kbd>點字</kbd>跳到那個位置</div>
+      <div><kbd>A</kbd>自動等速捲動（備援）</div>
+      <div><kbd>[</kbd><kbd>]</kbd>自動捲動速度</div>
+      <div><kbd>+</kbd><kbd>−</kbd>字級</div>
+      <div><kbd>M</kbd>鏡像　<kbd>F</kbd>全螢幕</div>
+      <div><kbd>Home</kbd>回到開頭</div>
+      <div><kbd>E</kbd>／<kbd>Esc</kbd>回來改稿</div>
+    </div>
+    <p class="hint">語音辨識用瀏覽器內建的 Web Speech API，需要網路連線；第一次會詢問麥克風權限，請按「允許」。上台前先實際唸一段測試。</p>
+  </div>
+</section>
+
+<div id="stage"><div id="text"></div></div>
+<div class="band" aria-hidden="true"></div>
+
+<div id="bar">
+  <button id="editBtn">✎ 改稿</button>
+  <button id="micBtn">🎤 開始聆聽</button>
+  <button id="prevBtn">▲ 上一句</button>
+  <button id="nextBtn">▼ 下一句</button>
+  <button id="autoBtn">自動捲動</button>
+  <button id="slowBtn" aria-label="捲動變慢">慢</button>
+  <button id="fastBtn" aria-label="捲動變快">快</button>
+  <button id="smallBtn" aria-label="縮小字">A−</button>
+  <button id="bigBtn" aria-label="放大字">A＋</button>
+  <button id="mirBtn">鏡像</button>
+  <span class="sp"></span>
+  <button id="fullBtn">全螢幕</button>
+</div>
+<div id="status"><span class="dot" id="dot"></span><span id="heard">按空白鍵開始聆聽</span><span id="pct">0%</span></div>
+<div id="progress"></div>
+<div id="toast" hidden></div>
+
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const store = {
+    get(k, d){ try { const v = localStorage.getItem('prompter.'+k); return v === null ? d : v; } catch { return d; } },
+    set(k, v){ try { localStorage.setItem('prompter.'+k, v); } catch {} }
+  };
+
+  const SAMPLE = `【範例講稿，請換成你的內容】
+各位長官、各位同仁大家好，今天由我來報告這個專案目前的進度與下一步規劃。
+
+首先說明背景。我們在今年上半年完成了需求訪談，確認了三個核心目標：提升客服效率、降低人工轉接率，以及建立可以持續優化的知識庫。
+
+接下來看成果。上線三個月以來，智能客服的自動回覆率從百分之四十提升到百分之六十八，平均等待時間也縮短了將近一半。
+
+最後是下一步。我們預計在第四季導入語音通路，並且把報表整合進現有的管理平台。以上是我的報告，謝謝大家。`;
+
+  // ---------- tokenizer ----------
+  const CJK = /[㐀-鿿豈-﫿぀-ヿ가-힯]/;
+  const WORD = /[A-Za-z0-9À-ɏ０-９Ａ-Ｚａ-ｚ']/;
+  const SENT_END = /[。！？!?；;\n]|\.(\s|$)/;
+  const VARIANT = {'臺':'台','裏':'裡','着':'著','綫':'線','峰':'峰'};
+  const normWord = w => w.replace(/[０-９Ａ-Ｚａ-ｚ]/g, c => String.fromCharCode(c.charCodeAt(0)-0xFEE0)).toLowerCase().replace(/'/g,'');
+
+  function tokenize(str){
+    const out = [];
+    let i = 0;
+    while (i < str.length){
+      const ch = str[i];
+      if (CJK.test(ch)){ out.push({n: VARIANT[ch] || ch, s:i, e:i+1}); i++; }
+      else if (WORD.test(ch)){ let j=i; while (j<str.length && WORD.test(str[j])) j++; out.push({n: normWord(str.slice(i,j)), s:i, e:j}); i=j; }
+      else i++;
+    }
+    return out;
+  }
+  const tokNorms = s => tokenize(s).map(t => t.n);
+
+  // ---------- state ----------
+  let toks = [], norms = [], els = [], sentEnd = [], sentStart = [];
+  let pos = 0, curRange = [0,0], atEl = null;
+  const stage = $('stage'), textEl = $('text');
+
+  function build(script){
+    toks = tokenize(script); norms = toks.map(t=>t.n);
+    const frag = document.createDocumentFragment();
+    els = [];
+    let last = 0;
+    toks.forEach((t, i) => {
+      if (t.s > last) frag.appendChild(document.createTextNode(script.slice(last, t.s)));
+      const sp = document.createElement('span');
+      sp.className = 't'; sp.dataset.i = i; sp.textContent = script.slice(t.s, t.e);
+      frag.appendChild(sp); els.push(sp); last = t.e;
+    });
+    if (last < script.length) frag.appendChild(document.createTextNode(script.slice(last)));
+    textEl.replaceChildren(frag);
+    // sentence boundaries: a sentence ends at a token followed (before next token) by end punctuation
+    const N = toks.length; sentEnd = new Array(N); sentStart = new Array(N);
+    let start = 0;
+    for (let i=0;i<N;i++){
+      const gap = script.slice(toks[i].e, i+1<N ? toks[i+1].s : script.length);
+      sentStart[i] = start;
+      if (SENT_END.test(gap) || i===N-1){ for (let k=start;k<=i;k++) sentEnd[k]=i; start=i+1; }
+    }
+    pos = 0; curRange=[0,0]; atEl=null; finalBuf=[];
+    setPos(0, true);
+  }
+
+  function setPos(p, instant){
+    const N = toks.length;
+    p = Math.max(0, Math.min(N, p));
+    const a = Math.min(pos, p), b = Math.max(pos, p);
+    for (let i=a;i<b;i++) els[i].classList.toggle('r', i < p);
+    if (instant) els.forEach((el,i)=>el.classList.toggle('r', i<p));
+    for (let i=curRange[0]; i<curRange[1]; i++) els[i] && els[i].classList.remove('c');
+    if (atEl) atEl.classList.remove('at');
+    pos = p;
+    if (p < N){
+      const e = sentEnd[p] + 1;
+      for (let i=p;i<e;i++) els[i].classList.add('c');
+      curRange = [p, e];
+      atEl = els[p]; atEl.classList.add('at');
+    } else curRange=[0,0];
+    const pct = N ? Math.round(p/N*100) : 0;
+    $('pct').textContent = pct + '%';
+    $('progress').style.width = pct + '%';
+    follow(instant);
+  }
+
+  // ---------- smooth scrolling ----------
+  let target = 0, cur = 0, autoOn = false, autoSpeed = +store.get('speed', 40); // px per second
+  function follow(instant){
+    const el = els[Math.min(pos, els.length-1)];
+    if (!el) return;
+    target = Math.max(0, el.offsetTop - stage.clientHeight*0.35);
+    if (instant){ cur = target; stage.scrollTop = cur; }
+  }
+  let lastT = performance.now();
+  function loop(t){
+    const dt = Math.min(0.1, (t-lastT)/1000); lastT = t;
+    if (autoOn){
+      target += autoSpeed*dt;
+      // keep pos roughly in sync with the reading line while auto-scrolling
+      syncPosToLine();
+    }
+    const d = target - cur;
+    if (Math.abs(d) > 0.5){ cur += d * Math.min(1, dt*6); stage.scrollTop = cur; }
+    requestAnimationFrame(loop);
+  }
+  requestAnimationFrame(loop);
+  function syncPosToLine(){
+    const line = cur + stage.clientHeight*0.35;
+    let p = pos;
+    while (p < els.length && els[p].offsetTop + els[p].offsetHeight*0.5 < line) p++;
+    if (p !== pos){ const keep = target; setPos(p); target = keep; }
+  }
+  stage.addEventListener('wheel', e => { target = Math.max(0, target + e.deltaY); cur = target; stage.scrollTop = cur; }, {passive:true});
+  stage.addEventListener('scroll', () => { if (Math.abs(stage.scrollTop - cur) > 2){ cur = target = stage.scrollTop; } });
+
+  // ---------- matching ----------
+  function lcs(q, s0, e){
+    // LCS between q and norms[s0..e]
+    const m = q.length; let prev = new Array(m+1).fill(0), row = new Array(m+1).fill(0);
+    for (let j=s0;j<=e;j++){
+      const t = norms[j];
+      for (let i=1;i<=m;i++) row[i] = q[i-1]===t ? prev[i-1]+1 : (prev[i] > row[i-1] ? prev[i] : row[i-1]);
+      [prev,row] = [row,prev];
+    }
+    return prev[m];
+  }
+  function match(heard){
+    const N = norms.length; if (!N) return;
+    const Q = Math.min(12, heard.length); if (Q < 2) return;
+    const q = heard.slice(-Q);
+    const lo = Math.max(0, pos - 25), hi = Math.min(N-1, pos + 320);
+    let best = -1, bestScore = -1, bestRatio = 0;
+    for (let e=lo;e<=hi;e++){
+      const t = norms[e];
+      const eb = t===q[Q-1] ? 1 : t===q[Q-2] ? 0.6 : (Q>3 && t===q[Q-3]) ? 0.3 : -1;
+      if (eb < 0) continue;
+      const l = lcs(q, Math.max(0, e-Q-3), e);
+      const ratio = l / Q;
+      const d = e + 1 - pos;
+      const score = ratio + eb*0.12 - (d >= 0 ? d*0.0007 : -d*0.012);
+      if (score > bestScore){ bestScore = score; best = e; bestRatio = ratio; }
+    }
+    if (best < 0) return;
+    const d = best + 1 - pos;
+    let need = Q <= 3 ? 0.99 : Q <= 5 ? 0.75 : 0.55;
+    if (Q <= 3 && d > 25) return;
+    if (d > 90) need = Math.max(need, 0.75);
+    if (d < 0) { if (Q < 6) return; need = Math.max(need, 0.85); }
+    if (bestRatio >= need && d !== 0) setPos(best + 1);
+  }
+
+  // ---------- speech ----------
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  let rec = null, listening = false, finalBuf = [];
+  if (!SR) $('noSR').hidden = false;
+
+  function startMic(){
+    if (!SR){ toast('這個瀏覽器不支援語音辨識，請用 Chrome 或 Edge。'); return; }
+    if (listening) return;
+    rec = new SR();
+    rec.lang = $('lang').value; rec.continuous = true; rec.interimResults = true; rec.maxAlternatives = 1;
+    rec.onresult = ev => {
+      let interim = '';
+      for (let i=ev.resultIndex;i<ev.results.length;i++){
+        const r = ev.results[i];
+        if (r.isFinal) finalBuf.push(...tokNorms(r[0].transcript));
+        else interim += r[0].transcript;
+      }
+      if (finalBuf.length > 40) finalBuf = finalBuf.slice(-40);
+      const heardToks = finalBuf.concat(tokNorms(interim));
+      match(heardToks);
+      const lastText = (ev.results[ev.results.length-1][0].transcript || '').trim();
+      if (lastText) $('heard').innerHTML = '<bdi></bdi>', $('heard').firstChild.textContent = lastText;
+    };
+    rec.onerror = e => {
+      if (e.error === 'no-speech' || e.error === 'aborted') return;
+      const msg = {
+        'not-allowed':'這裡無法使用麥克風。請改按「自動捲動」（慢／快調速度），或點字、按 ▼ 下一句。語音跟讀請在電腦用 Chrome 開下載的檔案。',
+        'service-not-allowed':'瀏覽器不允許語音辨識服務。請用 Chrome 或 Edge 開啟。',
+        'network':'語音辨識需要網路連線，請檢查網路。',
+        'audio-capture':'找不到麥克風，請確認麥克風已連接。'
+      }[e.error] || ('語音辨識錯誤：' + e.error);
+      toast(msg);
+      if (e.error !== 'network') stopMic(true);
+      $('dot').className = 'dot err';
+    };
+    rec.onend = () => { if (listening) setTimeout(() => { try { rec.start(); } catch {} }, 120); };
+    try { rec.start(); } catch {}
+    listening = true;
+    $('dot').className = 'dot live';
+    $('micBtn').classList.add('live'); $('micBtn').textContent = '🎤 聆聽中（空白鍵暫停）';
+    $('heard').textContent = '聆聽中…開始唸稿';
+    wake();
+  }
+  function stopMic(keepErr){
+    listening = false;
+    try { rec && rec.stop(); } catch {}
+    if (!keepErr) $('dot').className = 'dot';
+    $('micBtn').classList.remove('live'); $('micBtn').textContent = '🎤 開始聆聽';
+    if (!keepErr) $('heard').textContent = '已暫停，按空白鍵繼續';
+  }
+  const toggleMic = () => listening ? stopMic() : startMic();
+
+  // ---------- wake lock ----------
+  let lock = null;
+  async function wake(){ try { if ('wakeLock' in navigator && !lock) { lock = await navigator.wakeLock.request('screen'); lock.addEventListener('release', ()=>lock=null); } } catch {} }
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState==='visible' && listening) wake(); });
+
+  // ---------- UI ----------
+  let toastTimer;
+  function toast(m){ const t=$('toast'); t.textContent=m; t.hidden=false; clearTimeout(toastTimer); toastTimer=setTimeout(()=>t.hidden=true, 4500); }
+
+  function setFs(v){
+    v = Math.max(28, Math.min(120, v));
+    document.documentElement.style.setProperty('--fs', v+'px');
+    $('fs').value = v; $('fsv').textContent = v; store.set('fs', v);
+    requestAnimationFrame(()=>follow(true));
+  }
+  function setMirror(on){ stage.classList.toggle('mirror', on); $('mirror').checked = on; $('mirBtn').classList.toggle('on', on); store.set('mirror', on?'1':'0'); }
+  function setAuto(on){ autoOn = on; $('autoBtn').classList.toggle('on', on); $('autoBtn').textContent = on ? `自動捲動 ${autoSpeed}` : '自動捲動'; if (on) target = cur; }
+
+  function openSetup(){ stopMic(); setAuto(false); $('setup').hidden = false; $('script').focus(); }
+  function start(){
+    const s = $('script').value;
+    if (!s.trim()){ toast('請先貼上講稿'); return; }
+    store.set('script', s); store.set('lang', $('lang').value);
+    $('setup').hidden = true;
+    build(s);
+    setTimeout(()=>follow(true), 50);
+    showBar();
+  }
+
+  function nextSentence(){ if (pos < toks.length){ setPos(sentEnd[pos] + 1); finalBuf = []; } }
+  function prevSentence(){
+    if (!toks.length) return;
+    let p = Math.min(pos, toks.length-1);
+    let s = sentStart[p];
+    if (s === pos && s > 0) s = sentStart[s-1];
+    setPos(s); finalBuf = [];
+  }
+
+  textEl.addEventListener('click', e => { const t = e.target.closest('.t'); if (t){ setPos(+t.dataset.i); finalBuf = []; } });
+  $('startBtn').onclick = start;
+  $('editBtn').onclick = openSetup;
+  $('micBtn').onclick = toggleMic;
+  $('autoBtn').onclick = () => setAuto(!autoOn);
+  $('prevBtn').onclick = prevSentence;
+  $('nextBtn').onclick = nextSentence;
+  $('slowBtn').onclick = () => changeSpeed(-10);
+  $('fastBtn').onclick = () => changeSpeed(10);
+  function changeSpeed(d){ autoSpeed = Math.max(10, Math.min(300, autoSpeed + d)); store.set('speed', autoSpeed); setAuto(autoOn); toast('自動捲動速度 ' + autoSpeed); }
+  $('smallBtn').onclick = () => setFs(+$('fs').value - 4);
+  $('bigBtn').onclick = () => setFs(+$('fs').value + 4);
+  $('mirBtn').onclick = () => setMirror(!stage.classList.contains('mirror'));
+  $('fullBtn').onclick = fullscreen;
+  $('fs').oninput = e => setFs(+e.target.value);
+  $('mirror').onchange = e => setMirror(e.target.checked);
+  $('lang').onchange = e => { store.set('lang', e.target.value); if (listening){ stopMic(); startMic(); } };
+
+  function fullscreen(){
+    try {
+      if (document.fullscreenElement) document.exitFullscreen();
+      else document.documentElement.requestFullscreen().catch(()=>toast('無法進入全螢幕，可按 F11'));
+    } catch { toast('無法進入全螢幕，可按 F11'); }
+  }
+
+  document.addEventListener('keydown', e => {
+    if (!$('setup').hidden){
+      if ((e.ctrlKey||e.metaKey) && e.key === 'Enter') start();
+      return;
+    }
+    const k = e.key;
+    if (k === ' '){ e.preventDefault(); toggleMic(); }
+    else if (k === 'ArrowDown' || k === 'PageDown' || k === 'ArrowRight'){ e.preventDefault(); nextSentence(); }
+    else if (k === 'ArrowUp' || k === 'PageUp' || k === 'ArrowLeft'){ e.preventDefault(); prevSentence(); }
+    else if (k === 'Home'){ e.preventDefault(); setPos(0); finalBuf=[]; }
+    else if (k === 'End'){ e.preventDefault(); setPos(toks.length); }
+    else if (k === '+' || k === '='){ setFs(+$('fs').value + 4); }
+    else if (k === '-' || k === '_'){ setFs(+$('fs').value - 4); }
+    else if (k === 'm' || k === 'M'){ setMirror(!stage.classList.contains('mirror')); }
+    else if (k === 'f' || k === 'F'){ fullscreen(); }
+    else if (k === 'a' || k === 'A'){ setAuto(!autoOn); }
+    else if (k === ']'){ autoSpeed = Math.min(300, autoSpeed + 10); store.set('speed', autoSpeed); setAuto(autoOn); toast('自動捲動速度 ' + autoSpeed); }
+    else if (k === '['){ autoSpeed = Math.max(10, autoSpeed - 10); store.set('speed', autoSpeed); setAuto(autoOn); toast('自動捲動速度 ' + autoSpeed); }
+    else if (k === 'e' || k === 'E' || k === 'Escape'){ if (k !== 'Escape' || !document.fullscreenElement) openSetup(); }
+    showBar();
+  });
+
+  // auto-hide toolbar
+  let idleTimer;
+  const touch = matchMedia('(pointer:coarse)').matches;
+  function showBar(){ $('bar').classList.remove('idle'); clearTimeout(idleTimer); if (touch) return; idleTimer = setTimeout(()=>{ if ($('setup').hidden) $('bar').classList.add('idle'); }, 2500); }
+  document.addEventListener('mousemove', showBar);
+  document.addEventListener('touchstart', showBar, {passive:true});
+  window.addEventListener('resize', () => follow(true));
+
+  // init
+  $('script').value = store.get('script', SAMPLE);
+  $('lang').value = store.get('lang', 'zh-TW');
+  setFs(+store.get('fs', innerWidth < 700 ? 34 : 56));
+  setMirror(store.get('mirror','0') === '1');
+  build($('script').value);
+})();
+</script>
+</body>
+</html>
